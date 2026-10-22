@@ -5,7 +5,16 @@
 static void require(bool v,const char* message){if(!v)throw std::runtime_error(message);}
 static void parameter(BroadcastProcessor& p,const char* name,float value){auto* x=p.parameters.getParameter(name);x->setValueNotifyingHost(x->convertTo0to1(value));}
 static void waitForConfiguration(BroadcastProcessor& p) {
-    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(45);
+    // Cold CoreML compilation of Studio Voice can exceed 45 seconds on hosted
+    // Intel Macs. This bounds loading, not UI responsiveness (checked below).
+#ifdef __APPLE__
+    constexpr int loadingSeconds=180;
+#else
+    constexpr int loadingSeconds=45;
+#endif
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(loadingSeconds);
+    std::cout<<"Waiting for configuration: backend="<<p.parameters.getRawParameterValue("backend")->load()
+             <<" studio="<<p.parameters.getRawParameterValue("studioEnabled")->load()<<std::endl;
     while(std::chrono::steady_clock::now()<deadline) {
         const auto beforeDispatch=std::chrono::steady_clock::now();
         juce::Timer::callPendingTimersSynchronously();
@@ -17,7 +26,7 @@ static void waitForConfiguration(BroadcastProcessor& p) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    throw std::runtime_error("Automatic configuration timed out");
+    throw std::runtime_error("Automatic configuration timed out: "+p.status().toStdString());
 }
 static std::vector<float> render(BroadcastProcessor& p) {
     p.setRateAndBufferSizeDetails(48000,512);p.setNonRealtime(true);p.prepareToPlay(48000,512);
