@@ -1,0 +1,12 @@
+build/
+build-*/
+.deps/
+assets/models/
+assets/dsp.bin
+assets/manifest.json
+assets/runtime/
+tests/generated/
+dist/
+__pycache__/
+upstream/
+macos-*.log

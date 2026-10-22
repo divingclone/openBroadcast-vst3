@@ -1,0 +1,73 @@
+name: Native VST3 builds
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to build
+        type: choice
+        options: [macos, all]
+        default: macos
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-15", "macos-15-intel"]' || '["windows-2022", "ubuntu-24.04", "macos-15", "macos-15-intel"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: divingclone/openBroadcast
+          ref: 7b6b733b0ed8d6590c8266f8025cba82bbf063b8
+          path: upstream
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install numpy onnxruntime-directml==1.24.4
+          ./scripts/build.ps1 -OpenBroadcast ./upstream -Python (Get-Command python).Source -Test
+      - if: runner.os == 'Linux'
+        run: |
+          python -m pip install numpy onnxruntime==1.24.4
+          xvfb-run -a python scripts/build.py --source ./upstream --test
+      - if: runner.os == 'macOS'
+        name: Build and test native macOS plugin
+        shell: bash
+        run: |
+          uname -m
+          xcodebuild -version
+          python -m pip install numpy onnxruntime==1.23.2
+          python scripts/build.py --source ./upstream --test --jobs 2 2>&1 | tee macos-build.log
+      - if: runner.os == 'macOS'
+        name: Verify extracted macOS package
+        shell: bash
+        run: python tests/verify_macos_package.py 2>&1 | tee macos-package.log
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'macOS'
+        with:
+          name: diagnostics-${{ matrix.os }}
+          path: |
+            macos-*.log
+            build-macOS-*/Testing/Temporary/*.log
+            build-macOS-*/editor-*.png
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VST3-${{ matrix.os }}
+          path: dist/*.zip
+          if-no-files-found: error
+          compression-level: 0
