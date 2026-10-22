@@ -50,7 +50,11 @@ def main():
         for executable in [binary, *libraries]:
             dependencies = run('otool', '-L', executable)
             print(dependencies)
-            for line in dependencies.splitlines()[1:]:
+            for line in dependencies.splitlines():
+                # Universal dylibs have a separate, unindented header for
+                # each architecture. Only indented lines are dependencies.
+                if not line[:1].isspace():
+                    continue
                 name = line.strip().split(' (', 1)[0]
                 if not name.startswith(('@', '/System/Library/', '/usr/lib/')):
                     raise RuntimeError(f'Non-portable dependency: {name}')
