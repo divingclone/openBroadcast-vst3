@@ -22,12 +22,11 @@ def run(*args):
 
 
 def main():
-    if platform.system() != 'Darwin':
-        raise RuntimeError('Run this validation on a native macOS runner.')
-    arch = platform.machine()
-    label = {'arm64': 'arm64', 'x86_64': 'x64'}[arch]
-    build = ROOT / f'build-macOS-{label}'
-    package = ROOT / f'dist/OpenBroadcast-VST3-macOS-{label}.zip'
+    if platform.system() != 'Darwin' or platform.machine() != 'arm64':
+        raise RuntimeError('Run this validation on a macOS Apple Silicon runner.')
+    arch = 'arm64'
+    build = ROOT / 'build-macOS-arm64'
+    package = ROOT / 'dist/OpenBroadcast-VST3-macOS-arm64.zip'
     with package.open('rb') as stream:
         print('ZIP SHA256:', hashlib.file_digest(stream, 'sha256').hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix='OpenBroadcast relocated ') as temporary:
@@ -45,14 +44,13 @@ def main():
         if not libraries:
             raise RuntimeError('Bundled ONNX Runtime is missing.')
         for library in libraries:
-            if arch not in run('lipo', '-archs', library).split():
-                raise RuntimeError(f'Runtime lacks {arch}: {library}')
+            if run('lipo', '-archs', library).split() != [arch]:
+                raise RuntimeError(f'Runtime must contain only {arch}: {library}')
         for executable in [binary, *libraries]:
             dependencies = run('otool', '-L', executable)
             print(dependencies)
             for line in dependencies.splitlines():
-                # Universal dylibs have a separate, unindented header for
-                # each architecture. Only indented lines are dependencies.
+                # Only indented lines describe dependencies, not file headers.
                 if not line[:1].isspace():
                     continue
                 name = line.strip().split(' (', 1)[0]

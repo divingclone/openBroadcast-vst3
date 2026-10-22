@@ -6,7 +6,7 @@ static void require(bool v,const char* message){if(!v)throw std::runtime_error(m
 static void parameter(BroadcastProcessor& p,const char* name,float value){auto* x=p.parameters.getParameter(name);x->setValueNotifyingHost(x->convertTo0to1(value));}
 static void waitForConfiguration(BroadcastProcessor& p) {
     // Cold CoreML compilation of Studio Voice can exceed 45 seconds on hosted
-    // Intel Macs. This bounds loading, not UI responsiveness (checked below).
+    // macOS runners. This bounds loading, not UI responsiveness (checked below).
 #ifdef __APPLE__
     constexpr int loadingSeconds=180;
 #else

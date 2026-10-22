@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-15", "macos-15-intel"]' || '["windows-2022", "ubuntu-24.04", "macos-15", "macos-15-intel"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-15"]' || '["windows-2022", "ubuntu-24.04", "macos-15"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -58,9 +58,7 @@ jobs:
         run: |
           python tests/make_reference.py --source ./upstream
           python tests/make_studio_reference.py --source ./upstream
-          arch=$(uname -m)
-          if [ "$arch" = x86_64 ]; then arch=x64; fi
-          ctest --test-dir "build-macOS-$arch" -C Release --output-on-failure --timeout 600 2>&1 | tee macos-tests.log
+          ctest --test-dir build-macOS-arm64 -C Release --output-on-failure --timeout 600 2>&1 | tee macos-tests.log
       - if: runner.os == 'macOS'
         name: Verify extracted macOS package
         shell: bash
@@ -76,7 +74,7 @@ jobs:
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os == 'macos-15' && 'OpenBroadcast-VST3-macOS-arm64' || matrix.os == 'macos-15-intel' && 'OpenBroadcast-VST3-macOS-x64' || format('VST3-{0}', matrix.os) }}
+          name: ${{ matrix.os == 'macos-15' && 'OpenBroadcast-VST3-macOS-arm64' || format('VST3-{0}', matrix.os) }}
           path: dist/*.zip
           if-no-files-found: error
           compression-level: 0

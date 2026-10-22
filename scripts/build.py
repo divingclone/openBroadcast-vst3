@@ -25,9 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RUNTIMES = {
     ('Linux', 'x86_64'): ('1.24.4', 'linux-x64-gpu', 'c5f804ff5d239b436fa59e9f2fb288a39f7eb9552f6a636c8b71e792e91a8808'),
     ('Linux', 'aarch64'): ('1.24.4', 'linux-aarch64', '866109a9248d057671a039b9d725be4bd86888e3754140e6701ec621be9d4d7e'),
-    # 1.23.2 is the last selected SDK with an official Intel + Apple Silicon archive.
-    ('Darwin', 'arm64'): ('1.23.2', 'osx-universal2', '49ae8e3a66ccb18d98ad3fe7f5906b6d7887df8a5edd40f49eb2b14e20885809'),
-    ('Darwin', 'x86_64'): ('1.23.2', 'osx-universal2', '49ae8e3a66ccb18d98ad3fe7f5906b6d7887df8a5edd40f49eb2b14e20885809'),
+    ('Darwin', 'arm64'): ('1.23.2', 'osx-arm64', 'b4d513ab2b26f088c66891dbbc1408166708773d7cc4163de7bdca0e9bbb7856'),
 }
 AMD_WHEEL = 'onnxruntime_migraphx-1.27.1-cp312-cp312-manylinux_2_34_x86_64.whl'
 AMD_URL = 'https://files.pythonhosted.org/packages/9c/b7/7946bd996b95c859162ccd76c7e1e3f01e3627e5bf06a3ae1bf288fe89bd/' + AMD_WHEEL
@@ -94,13 +92,10 @@ def main():
     parser.add_argument('--build-dir', type=Path)
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--jobs', type=int, default=4)
-    parser.add_argument('--universal', action='store_true', help='Build both Intel and Apple Silicon on macOS')
     args = parser.parse_args()
     system, arch = platform.system(), platform.machine()
     if (system, arch) not in RUNTIMES:
-        parser.error('Use scripts/build.ps1 on Windows; this script supports native 64-bit macOS/Linux.')
-    if args.universal and system != 'Darwin':
-        parser.error('--universal requires macOS')
+        parser.error('Use scripts/build.ps1 on Windows; this script supports macOS Apple Silicon and 64-bit Linux.')
     (ROOT / '.deps').mkdir(exist_ok=True)
     repository('JUCE', 'https://github.com/juce-framework/JUCE.git', '8.0.12', '29396c22c93392d6738e021b83196283d6e4d850')
     repository('kissfft', 'https://github.com/mborgerding/kissfft.git', '131.1.0', '8f47a67f595a6641c566087bf5277034be64f24d')
@@ -115,11 +110,11 @@ def main():
     shutil.copy2(ROOT / '.deps/JUCE/LICENSE.md', licenses / 'JUCE.md')
     shutil.copy2(ROOT / '.deps/kissfft/LICENSES/BSD-3-Clause', licenses / 'KissFFT.txt')
     os_label = 'macOS' if system == 'Darwin' else 'Linux'
-    arch_label = 'universal2' if args.universal else {'x86_64': 'x64', 'aarch64': 'arm64'}.get(arch, arch)
+    arch_label = {'x86_64': 'x64', 'aarch64': 'arm64'}.get(arch, arch)
     build = (args.build_dir or ROOT / f'build-{os_label}-{arch_label}').resolve()
     options = ['-DCMAKE_BUILD_TYPE=Release', f'-DORT_DIR={runtime}', f'-DAMD_ORT_DIR={amd or ""}']
     if system == 'Darwin':
-        options += ['-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', f'-DCMAKE_OSX_ARCHITECTURES={"arm64;x86_64" if args.universal else arch}']
+        options += ['-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', '-DCMAKE_OSX_ARCHITECTURES=arm64']
     run('cmake', '-S', ROOT, '-B', build, *options)
     run('cmake', '--build', build, '--config', 'Release', '--parallel', str(args.jobs))
     bundle = build / 'OpenBroadcast_artefacts/Release/VST3/OpenBroadcast.vst3'
