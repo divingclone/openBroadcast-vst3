@@ -45,13 +45,22 @@ jobs:
           python -m pip install numpy onnxruntime==1.24.4
           xvfb-run -a python scripts/build.py --source ./upstream --test
       - if: runner.os == 'macOS'
-        name: Build and test native macOS plugin
+        name: Build and package native macOS plugin
         shell: bash
         run: |
           uname -m
           xcodebuild -version
           python -m pip install numpy onnxruntime==1.23.2
-          python scripts/build.py --source ./upstream --test --jobs 2 2>&1 | tee macos-build.log
+          python scripts/build.py --source ./upstream --jobs 2 2>&1 | tee macos-build.log
+      - if: runner.os == 'macOS'
+        name: Test audio processing and plugin behavior
+        shell: bash
+        run: |
+          python tests/make_reference.py --source ./upstream
+          python tests/make_studio_reference.py --source ./upstream
+          arch=$(uname -m)
+          if [ "$arch" = x86_64 ]; then arch=x64; fi
+          ctest --test-dir "build-macOS-$arch" -C Release --output-on-failure --timeout 600 2>&1 | tee macos-tests.log
       - if: runner.os == 'macOS'
         name: Verify extracted macOS package
         shell: bash
@@ -67,7 +76,7 @@ jobs:
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
-          name: VST3-${{ matrix.os }}
+          name: ${{ matrix.os == 'macos-15' && 'OpenBroadcast-VST3-macOS-arm64' || matrix.os == 'macos-15-intel' && 'OpenBroadcast-VST3-macOS-x64' || format('VST3-{0}', matrix.os) }}
           path: dist/*.zip
           if-no-files-found: error
           compression-level: 0

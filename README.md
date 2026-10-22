@@ -14,5 +14,4 @@ Close your host, extract the ZIP for your operating system and architecture, cop
 | Linux x64 (built on Ubuntu 24.04) | `~/.vst3` |
 | macOS 14+ (Apple Silicon / Intel) | `~/Library/Audio/Plug-Ins/VST3` |
 
-Windows and Linux CPU/CUDA builds are tested locally; AMD GPU execution and native macOS validation remain pending. Check [AMD's compatibility requirements](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html) before installing ROCm; missing libraries, unsupported hardware or GPU initialization failures use CPU processing.
-Native macOS/Linux builds use `python3 scripts/build.py --source /path/to/openbroadcast --test` (Python 3.12+). Build prerequisites are in the script's help; macOS builds are ad-hoc signed, not notarized.
+Download the ZIP for your platform from the latest successful [Actions build](https://github.com/divingclone/openBroadcast-vst3/actions/workflows/native-builds.yml). Choose `macOS-arm64` for Apple Silicon or `macOS-x64` for Intel; macOS packages are ad-hoc signed, not notarized. AMD GPU execution still needs validation on physical hardware; see [AMD's compatibility requirements](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html).

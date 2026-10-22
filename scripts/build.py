@@ -133,7 +133,7 @@ def main():
         if args.source:
             run(sys.executable, 'tests/make_reference.py', '--source', args.source.resolve())
             run(sys.executable, 'tests/make_studio_reference.py', '--source', args.source.resolve())
-        run('ctest', '--test-dir', build, '-C', 'Release', '--output-on-failure')
+        run('ctest', '--test-dir', build, '-C', 'Release', '--output-on-failure', '--timeout', '600')
     destination = ROOT / 'dist' / f'OpenBroadcast-VST3-{os_label}-{arch_label}.zip'
     destination.parent.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='openbroadcast-package-') as staging:

@@ -13,7 +13,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def run(*args):
     print('+', *map(str, args), flush=True)
-    return subprocess.check_output(list(map(str, args)), text=True)
+    try:
+        return subprocess.check_output(list(map(str, args)), text=True,
+                                       stderr=subprocess.STDOUT, timeout=600)
+    except subprocess.CalledProcessError as error:
+        print(error.output, flush=True)
+        raise
 
 
 def main():
