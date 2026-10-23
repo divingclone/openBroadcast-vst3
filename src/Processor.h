@@ -4,6 +4,7 @@
 #include "ProcessingEngine.h"
 #include "Transport.h"
 #include "GpuDevices.h"
+#include "PerformanceMeter.h"
 #include <thread>
 #include <mutex>
 
@@ -32,6 +33,7 @@ public:
     void setStateInformation(const void*, int) override;
     juce::AudioProcessorParameter* getBypassParameter() const override;
     juce::String status() const;
+    double processingLoad() const;
     const std::vector<ob::GpuDevice> devices;
     juce::AudioProcessorValueTreeState parameters;
     std::atomic<uint64_t> underruns{0};
@@ -43,6 +45,8 @@ private:
     std::thread configurationWorker;
     std::atomic<bool> prepared{false}, configurationLoading{false};
     void process(juce::AudioBuffer<float>&, bool bypass);
+    void restartStream(bool clearDry);
+    bool transportChanged(int samples);
     void runWorker();
     void fail(const std::string&);
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
@@ -54,11 +58,14 @@ private:
     std::atomic<bool> stopping{false}, failed{false};
     std::atomic<bool> resetRequested{false};
     std::atomic<uint64_t> generation{0};
+    ob::PerformanceMeter performance;
     bool ready{}, haveWet{};
     int packetSize{960}, offset{}, channels{2}, dryPos{};
     std::atomic<int> selectedBackend{2}, selectedDevice{0};
     std::atomic<bool> selectedStudio{false};
     uint64_t sequence{};
+    bool haveTransport{}, havePosition{}, wasPlaying{};
+    int64_t previousPosition{}, expectedPosition{};
     ob::Packet incoming{}, outgoing{};
     std::array<std::vector<float>,2> dry;
     float wetSmooth{1};

@@ -3,6 +3,9 @@
 
 namespace {
 constexpr int bufferingPackets = 4;
+int64_t monotonicMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 std::filesystem::path nativePath(const juce::String& value) {
 #ifdef _WIN32
     return std::filesystem::path(value.toWideCharPointer());
@@ -63,7 +66,12 @@ public:
         };
         message.setColour(juce::Label::textColourId,juce::Colour(0xffa7b1bf));
         message.setJustificationType(juce::Justification::topLeft); addAndMakeVisible(message);
-        setSize(620, 534); timerCallback(); startTimerHz(10);
+        addAndMakeVisible(loadBar); addAndMakeVisible(loadText);
+        loadBar.setTextToDisplay(" ");
+        loadBar.setColour(juce::ProgressBar::backgroundColourId,juce::Colour(0xff29343d));
+        loadText.setJustificationType(juce::Justification::centredLeft);
+        loadText.setTooltip("Processing time divided by audio duration, averaged over recent audio. 100% is the real-time limit. This is per-instance processing load, not total GPU utilization. Studio Voice is measured over complete 80 ms cycles.");
+        setSize(620, 524); timerCallback(); startTimerHz(10);
     }
     void paint(juce::Graphics& g) override {
         g.fillAll(juce::Colour(0xff121821)); g.setColour(juce::Colours::white);
@@ -71,6 +79,9 @@ public:
         g.setFont(14.f); g.setColour(juce::Colour(0xffa7b1bf));
         g.drawText("Denoise / Dereverb / Studio Voice",24,60,440,24,juce::Justification::left);
         g.setColour(juce::Colour(0xffd8b77a));
+        g.setFont(13.f);
+        g.drawText("Designed for mono audio; multichannel processing may produce inconsistent results.",24,84,572,22,juce::Justification::left);
+        g.setFont(14.f);
         g.drawText("High resource usage - GPU recommended",190,220,406,24,juce::Justification::left);
         g.setColour(juce::Colour(0xffa7b1bf));
         g.setFont(14.f);
@@ -88,7 +99,9 @@ public:
         noise.setBounds(190,110,406,32); reverb.setBounds(190,165,406,32); mix.setBounds(190,312,406,32);
         studioOn.setBounds(24,218,160,32);
         device.setBounds(110,374,486,30); bypass.setBounds(508,30,88,30);
-        message.setBounds(24,427,572,90);
+        message.setBounds(24,416,572,statusHeight);
+        loadText.setBounds(24,416+statusHeight+6,572,22);
+        loadBar.setBounds(24,416+statusHeight+34,572,12);
     }
 private:
     void timerCallback() override {
@@ -102,7 +115,25 @@ private:
         noise.setEnabled(!studio && processor.parameters.getRawParameterValue("denoiseEnabled")->load()>.5f);
         reverb.setEnabled(!studio && processor.parameters.getRawParameterValue("dereverbEnabled")->load()>.5f);
         auto status=processor.status();
+        if(status!=message.getText()) {
+            juce::AttributedString text;
+            text.append(status,message.getFont());
+            juce::TextLayout layout; layout.createLayout(text,562.f);
+            const int needed=juce::jlimit(40,120,static_cast<int>(std::ceil(layout.getHeight()))+8);
+            if(needed!=statusHeight) {
+                statusHeight=needed;
+                setSize(getWidth(),416+statusHeight+68);
+            }
+        }
         message.setText(status,juce::dontSendNotification); message.setTooltip(status);
+        const double load=processor.processingLoad();
+        loadValue=load<0 ? 0. : juce::jlimit(0.,1.,load/100.);
+        const auto colour=load<0 ? juce::Colour(0xffa7b1bf) : load>=100 ? juce::Colour(0xffef7777)
+            : load>=80 ? juce::Colour(0xffd8b77a) : juce::Colour(0xff79b84a);
+        loadBar.setColour(juce::ProgressBar::foregroundColourId,colour);
+        loadText.setColour(juce::Label::textColourId,colour);
+        loadText.setText(load<0 ? "Processing load: -- (no recent measurement)"
+            : "Processing load: "+juce::String(load,1)+"%"+(load>=100 ? "  - Above real-time budget" : ""),juce::dontSendNotification);
     }
     using Attachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -111,6 +142,10 @@ private:
     juce::ToggleButton bypass,denoiseOn,dereverbOn,studioOn;
     juce::ComboBox device;
     juce::Label message;
+    int statusHeight{40};
+    double loadValue{};
+    juce::ProgressBar loadBar{loadValue};
+    juce::Label loadText;
     std::unique_ptr<Attachment> noiseLink,reverbLink,mixLink;
     std::unique_ptr<ButtonAttachment> bypassLink,denoiseLink,dereverbLink,studioLink;
 };
@@ -160,6 +195,8 @@ void BroadcastProcessor::prepareToPlay(double rate,int) {
     const std::lock_guard<std::recursive_mutex> lock(lifecycleMutex);
     releaseResources(); failed=false; underruns=0;
     resetRequested=false; generation=0;
+    performance.reset();
+    haveTransport=false; havePosition=false;
     { std::lock_guard<std::mutex> lock(statusMutex); error.clear(); deviceNote.clear(); activeDevice="Initializing"; }
     channels=getTotalNumInputChannels(); offset=0; sequence=0; haveWet=false; dryPos=0;
     for(auto& d:dry)d.clear();
@@ -258,13 +295,18 @@ void BroadcastProcessor::runWorker() {
                 if(packet->generation!=generation.load(std::memory_order_acquire)) { queues->input.pop(); continue; }
                 if(packet->generation!=currentGeneration) {
                     currentGeneration=packet->generation; expected=0;
+                    performance.reset();
                     if(engine)engine->reset();
                 }
                 // An overrun invalidates the model timeline. Fail to aligned dry
                 // instead of replaying stale wet audio or hiding missing input.
                 if (packet->sequence != expected++) throw std::runtime_error("Inference overloaded; reactivate plugin or use CPU / fewer instances");
                 ob::Packet result=*packet; queues->input.pop();
+                const auto started=std::chrono::steady_clock::now();
                 engine->process(result);
+                const auto elapsedMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+                if(result.generation==generation.load(std::memory_order_acquire))
+                    performance.processed(elapsedMs,1000.*result.count/getSampleRate(),result.generation,monotonicMs());
                 while(result.generation==generation.load(std::memory_order_acquire) && !stopping.load(std::memory_order_acquire)) {
                     if(queues->output.push(result))break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -275,14 +317,37 @@ void BroadcastProcessor::runWorker() {
 }
 void BroadcastProcessor::processBlock(juce::AudioBuffer<float>& b,juce::MidiBuffer& midi) { midi.clear(); process(b,false); }
 void BroadcastProcessor::processBlockBypassed(juce::AudioBuffer<float>& b,juce::MidiBuffer& midi) { midi.clear(); process(b,true); }
+bool BroadcastProcessor::transportChanged(int samples) {
+    auto* playHead=getPlayHead();
+    const auto position=playHead ? playHead->getPosition() : juce::Optional<juce::AudioPlayHead::PositionInfo>{};
+    if(!position) { haveTransport=false; havePosition=false; return false; }
+    const bool playing=position->getIsPlaying();
+    bool changed=haveTransport && playing!=wasPlaying;
+    if(const auto time=position->getTimeInSamples()) {
+        // Stopped hosts may hold the position or advance it while monitoring.
+        // During playback, a seek or loop wrap breaks sample continuity.
+        if(havePosition && *time!=expectedPosition && (playing || *time!=previousPosition))changed=true;
+        previousPosition=*time; expectedPosition=*time+samples; havePosition=true;
+    } else havePosition=false;
+    haveTransport=true; wasPlaying=playing;
+    return changed;
+}
+void BroadcastProcessor::restartStream(bool clearDry) {
+    // Only the audio thread changes the generation or consumes output. The
+    // worker discards stale input and resets model state off the audio thread.
+    generation.fetch_add(1,std::memory_order_release);
+    offset=0; sequence=0; haveWet=false;
+    if(clearDry) {
+        dryPos=0;
+        for(auto& d:dry)std::fill(d.begin(),d.end(),0.f);
+    }
+    if(queues)while(queues->output.front())queues->output.pop();
+}
 void BroadcastProcessor::process(juce::AudioBuffer<float>& buffer,bool bypassed) {
     juce::ScopedNoDenormals denormals;
-    if(resetRequested.exchange(false,std::memory_order_acq_rel)) {
-        generation.fetch_add(1,std::memory_order_release);
-        offset=0; sequence=0; dryPos=0; haveWet=false;
-        for(auto& d:dry)std::fill(d.begin(),d.end(),0.f);
-        if(queues)while(queues->output.front())queues->output.pop();
-    }
+    if(buffer.getNumSamples()==0)return;
+    const bool jumped=transportChanged(buffer.getNumSamples());
+    if(resetRequested.exchange(false,std::memory_order_acq_rel) || jumped)restartStream(true);
     const auto count=std::min(channels,buffer.getNumChannels());
     for(int c=count;c<buffer.getNumChannels();++c)buffer.clear(c,0,buffer.getNumSamples());
     if(dry[0].empty()) { buffer.clear(); return; }
@@ -322,11 +387,24 @@ void BroadcastProcessor::process(juce::AudioBuffer<float>& buffer,bool bypassed)
             if(ready && !failed.load(std::memory_order_relaxed)) {
                 if(isNonRealtime()) {
                     while(!queues->input.push(incoming) && !failed.load() && !stopping.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                } else if(!queues->input.push(incoming)) ++underruns;
+                } else if(!queues->input.push(incoming)) {
+                    ++underruns;
+                    // Host seeks/anticipative rendering can deliver bursts.
+                    // Start a fresh timeline instead of leaving a sequence gap
+                    // that permanently disables processing. Preserve dry audio
+                    // until fresh wet packets are ready; never block here.
+                    restartStream(false);
+                    continue;
+                }
             }
             offset=0; ++sequence;
         }
     }
+}
+double BroadcastProcessor::processingLoad() const {
+    if(!prepared.load(std::memory_order_acquire) || configurationLoading.load(std::memory_order_acquire)
+       || failed.load(std::memory_order_acquire))return -1.;
+    return performance.load(generation.load(std::memory_order_acquire),monotonicMs());
 }
 juce::String BroadcastProcessor::status() const {
     std::lock_guard<std::mutex> lock(statusMutex);

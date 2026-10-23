@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(OpenBroadcastVST VERSION 0.6.0 LANGUAGES C CXX)
+project(OpenBroadcastVST VERSION 0.7.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(MSVC)
@@ -77,6 +77,9 @@ add_custom_command(TARGET OpenBroadcast_VST3 POST_BUILD
     "-DDIRECTML=${CMAKE_SOURCE_DIR}/.deps/directml/bin/x64-win/DirectML.dll"
     -P "${CMAKE_SOURCE_DIR}/cmake/BundleResources.cmake")
 enable_testing()
+add_executable(performance_test tests/performance_test.cpp)
+target_include_directories(performance_test PRIVATE src)
+add_test(NAME performance COMMAND performance_test)
 add_executable(engine_test tests/engine_test.cpp)
 target_link_libraries(engine_test PRIVATE ob_engine)
 add_test(NAME engine COMMAND engine_test "${CMAKE_SOURCE_DIR}/assets" "${ORT_RUNTIME_DIR}" "${CMAKE_SOURCE_DIR}/tests/generated")
@@ -86,6 +89,9 @@ add_test(NAME studio_cpu COMMAND studio_test "${CMAKE_SOURCE_DIR}/assets" "${ORT
 add_executable(plugin_test tests/plugin_test.cpp)
 target_link_libraries(plugin_test PRIVATE OpenBroadcast ob_engine juce::juce_audio_utils juce::juce_recommended_config_flags)
 add_dependencies(plugin_test OpenBroadcast_VST3)
+add_executable(studio_stream_test tests/studio_stream_test.cpp)
+target_link_libraries(studio_stream_test PRIVATE OpenBroadcast ob_engine juce::juce_audio_utils juce::juce_recommended_config_flags)
+add_dependencies(studio_stream_test OpenBroadcast_VST3)
 add_test(NAME plugin COMMAND plugin_test "${RESOURCE_DIR}")
 if(APPLE)
   # Includes repeated cold CoreML model loads and asynchronous mode changes.

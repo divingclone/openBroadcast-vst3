@@ -4,6 +4,67 @@
 #include <stdexcept>
 static void require(bool v,const char* message){if(!v)throw std::runtime_error(message);}
 static void parameter(BroadcastProcessor& p,const char* name,float value){auto* x=p.parameters.getParameter(name);x->setValueNotifyingHost(x->convertTo0to1(value));}
+class TestPlayHead final : public juce::AudioPlayHead {
+public:
+    juce::Optional<PositionInfo> getPosition() const override { return position; }
+    juce::Optional<PositionInfo> position{PositionInfo{}};
+};
+static void testTransport(BroadcastProcessor& p) {
+    TestPlayHead playHead;
+    p.setPlayHead(&playHead);
+    for(int backend:{0,2}) {
+        parameter(p,"backend",static_cast<float>(backend));
+        parameter(p,"noise",0);parameter(p,"reverb",0);
+        p.setRateAndBufferSizeDetails(48000,480);p.setNonRealtime(true);p.prepareToPlay(48000,480);
+        require(!p.status().startsWith("Dry fallback"),p.status().toRawUTF8());
+        int64_t cursor=0;
+        playHead.position=juce::AudioPlayHead::PositionInfo{};
+        playHead.position->setIsPlaying(true);
+        auto block=[&](int samples,float input) {
+            playHead.position->setTimeInSamples(cursor);
+            juce::AudioBuffer<float> audio(2,samples);
+            for(int c=0;c<2;++c)for(int i=0;i<samples;++i)audio.setSample(c,i,input);
+            juce::MidiBuffer midi;p.processBlock(audio,midi);
+            cursor+=samples;
+            require(!p.status().startsWith("Dry fallback"),p.status().toRawUTF8());
+            return audio.getMagnitude(0,samples);
+        };
+        // Normal variable-sized playback must retain its delayed audio.
+        for(int i=0;i<40;++i)block(i%2 ? 127 : 512,.1f);
+        require(block(480,.1f)>.05f,"Continuous transport repeatedly reset audio");
+        // No reset() call: emulate REAPER seeks and loop wraps with old audio queued.
+        for(int64_t destination:{480000,960,240000,0}) {
+            cursor=destination;
+            for(int i=0;i<20;++i)require(block(127,0)<1e-7f,"Seek leaked old audio/model state");
+            for(int i=0;i<30;++i)block(480,.1f);
+            require(block(480,.1f)>.05f,"Seek failed to resume processing");
+        }
+        playHead.position->setIsPlaying(false);
+        const auto stoppedPosition=cursor;
+        for(int i=0;i<30;++i) { cursor=stoppedPosition; block(480,.1f); }
+        cursor=stoppedPosition;
+        require(block(480,.1f)>.05f,"Stationary transport reset every callback");
+        // A real-time burst must recover even without any transport information.
+        p.setPlayHead(nullptr);p.setNonRealtime(false);
+        juce::AudioBuffer<float> burst(2,480000);burst.clear();juce::MidiBuffer midi;
+        p.processBlock(burst,midi);
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        require(!p.status().startsWith("Dry fallback"),"Input burst permanently disabled inference");
+        p.setNonRealtime(true);
+        const auto missedBeforeRecovery=p.underruns.load();
+        for(int i=0;i<40;++i)block(480,.1f);
+        require(block(480,.1f)>.05f,"Burst failed to resume audio");
+        require(p.underruns.load()==missedBeforeRecovery,"Burst recovery returned dry audio instead of processed packets");
+        require(p.processingLoad()>=0 && std::isfinite(p.processingLoad()),"No processing load after recovery");
+        std::cout<<"Processing load: "<<p.processingLoad()<<"%"<<std::endl;
+        // An explicit host reset must still flush everything after recovery.
+        p.reset();
+        for(int i=0;i<30;++i)require(block(480,0)<1e-7f,"Reset after burst leaked old audio");
+        p.releaseResources();p.setPlayHead(&playHead);
+        std::cout<<"TRANSPORT TESTS PASSED: backend="<<backend<<std::endl;
+    }
+    p.setPlayHead(nullptr);
+}
 static void waitForConfiguration(BroadcastProcessor& p) {
     // Cold CoreML compilation of Studio Voice can exceed 45 seconds on hosted
     // macOS runners. This bounds loading, not UI responsiveness (checked below).
@@ -75,6 +136,7 @@ int main(int argc,char** argv){
         else if(expectedBackend.isNotEmpty())require(namedGpu && p.status().contains(expectedBackend) && !p.status().startsWith("CPU"),"Expected automatic GPU backend");
         p.releaseResources();
         if(argc==3) { std::cout<<"DEVICE TESTS PASSED"<<std::endl;return 0; }
+        testTransport(p);
         parameter(p,"backend",0);
         parameter(p,"noise",.37f);parameter(p,"reverb",.23f);
         juce::MemoryBlock saved;p.getStateInformation(saved);
@@ -231,6 +293,9 @@ int main(int argc,char** argv){
         parameter(p,"denoiseEnabled",1);parameter(p,"dereverbEnabled",1);
         p.setRateAndBufferSizeDetails(48000,512);
         p.prepareToPlay(48000,512);
+        for(int i=0;i<20;++i) {
+            juce::AudioBuffer<float> audio(2,480);audio.clear();juce::MidiBuffer midi;p.processBlock(audio,midi);
+        }
         std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());require(editor!=nullptr,"Editor creation failed");
         auto snapshot=editor->createComponentSnapshot(editor->getLocalBounds());
         for(auto* child:editor->getChildren())if(auto* button=dynamic_cast<juce::TextButton*>(child))
